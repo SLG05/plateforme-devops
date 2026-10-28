@@ -1,0 +1,45 @@
+name: pipeline
+
+on:
+  push:
+    branches: [main]
+    paths: ["app/**"]              # seulement quand l'application change
+
+permissions:
+  contents: write                  # pousser le commit du tag
+  packages: write                  # pousser l'image dans ghcr.io
+
+jobs:
+  construire-et-deployer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Calculer le tag et le nom de l'image
+        run: |
+          echo "TAG=${GITHUB_SHA::8}" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Image multi-architecture : le cluster kind tourne en arm64 sur Mac Apple Silicon
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Construire et pousser l'image
+        run: |
+          docker buildx build --platform linux/amd64,linux/arm64 \
+            --build-arg VERSION=$TAG -t $IMAGE:$TAG --push app
+
+      - name: Écrire le nouveau tag dans git
+        run: |
+          cd deploy/overlays/dev
+          kustomize edit set image api=$IMAGE:$TAG
+          git config user.name pipeline-ci
+          git config user.email pipeline-ci@users.noreply.github.com
+          git commit -am "Déploie l'image $TAG en dev"
+          git push
